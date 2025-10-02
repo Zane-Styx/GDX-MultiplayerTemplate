@@ -1,6 +1,3 @@
-.gitkeep
-models/player.fbx
-models/player.obj
 skin/uiskin.atlas
 skin/uiskin.json
 skin/uiskin.png

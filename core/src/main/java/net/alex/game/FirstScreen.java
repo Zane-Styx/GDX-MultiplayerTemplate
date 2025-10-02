@@ -9,10 +9,6 @@ import com.badlogic.gdx.scenes.scene2d.ui.TextButton;
 import com.badlogic.gdx.scenes.scene2d.ui.TextField;
 import com.badlogic.gdx.scenes.scene2d.ui.Table;
 import com.badlogic.gdx.utils.viewport.ScreenViewport;
-import com.esotericsoftware.kryonet.Client;
-import com.esotericsoftware.kryonet.Connection;
-import com.esotericsoftware.kryonet.Listener;
-import net.alex.game.network.Network;
 
 public class FirstScreen implements Screen {
     private final MainGame game;
@@ -20,6 +16,7 @@ public class FirstScreen implements Screen {
     private Skin skin;
     private TextField ipField;
     private TextButton joinButton;
+    private TextButton leaveButton;
 
     private ClientManager clientManager;
 
@@ -49,9 +46,18 @@ public class FirstScreen implements Screen {
             return true;
         });
 
+        leaveButton = new TextButton("Leave", skin);
+        leaveButton.addListener(event -> {
+            if (!leaveButton.isPressed()) return false;
+            clientManager.disconnect(); // clean leave
+            return true;
+        });
+
         table.add(ipField).width(200).pad(10);
         table.row();
         table.add(joinButton).pad(10);
+        table.row();
+        table.add(leaveButton).pad(10);
     }
 
     @Override
@@ -59,18 +65,25 @@ public class FirstScreen implements Screen {
         Gdx.gl.glClearColor(0, 0, 0, 1);
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
 
+        // Update networking (smoothing)
+        clientManager.update(delta);
+
         stage.act(delta);
         stage.draw();
 
-        // Example: draw all players (replace with your renderer)
-        for (ClientManager.PlayerData player : clientManager.getPlayers().values()) {
-            System.out.println("Player " + player.id + " at " + player.x + "," + player.y);
-        }
+        // print player positions
+//        for (ClientManager.PlayerData player : clientManager.getPlayers().values()) {
+//            System.out.println(player.name + " @ " + player.x + "," + player.y);
+//        }
     }
 
     @Override public void resize(int width, int height) { stage.getViewport().update(width, height, true); }
     @Override public void pause() {}
     @Override public void resume() {}
     @Override public void hide() {}
-    @Override public void dispose() { stage.dispose(); skin.dispose(); clientManager.dispose(); }
+    @Override public void dispose() {
+        stage.dispose();
+        skin.dispose();
+        if (clientManager != null) clientManager.dispose();
+    }
 }

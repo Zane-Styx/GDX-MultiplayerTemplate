@@ -13,6 +13,11 @@ public class ClientManager {
     private PlayerData localPlayer;
 
     public ClientManager() {
+        createClient();
+    }
+
+    /** Create a new KryoNet Client and register listeners */
+    private void createClient() {
         client = new Client();
         Network.register(client);
 
@@ -21,7 +26,7 @@ public class ClientManager {
             public void connected(Connection c) {
                 System.out.println("Connected to server.");
                 Network.RegisterPlayer reg = new Network.RegisterPlayer();
-                reg.name = "Player_" + c.getID(); // could replace with UI input
+                reg.name = "Player"; // TODO: replace with user input later
                 client.sendTCP(reg);
             }
 
@@ -29,6 +34,8 @@ public class ClientManager {
             public void disconnected(Connection c) {
                 System.out.println("Disconnected from server.");
                 players.clear();
+                localPlayer = null;
+                connecting = false;
             }
 
             @Override
@@ -36,7 +43,7 @@ public class ClientManager {
                 if (object instanceof Network.WorldState) {
                     Network.WorldState state = (Network.WorldState) object;
                     for (Network.PlayerPosition pos : state.players) {
-                        addOrUpdate(pos.id, pos.x, pos.y, "Unknown");
+                        addOrUpdate(pos.id, pos.x, pos.y, null);
                     }
 
                 } else if (object instanceof Network.PlayerJoined) {
@@ -51,16 +58,25 @@ public class ClientManager {
 
                 } else if (object instanceof Network.PlayerPosition) {
                     Network.PlayerPosition pos = (Network.PlayerPosition) object;
-                    addOrUpdate(pos.id, pos.x, pos.y, null);
+                    PlayerData p = players.get(pos.id);
+                    if (p != null) {
+                        p.targetX = pos.x;
+                        p.targetY = pos.y;
+                    }
                 }
             }
         });
     }
 
-    /** Try connecting to server */
+    /** Try connecting to a server */
     public void connect(String ip) {
         if (connecting) return;
         connecting = true;
+
+        // If client was stopped (from dispose), make a new one
+        if (client == null) {
+            createClient();
+        }
 
         new Thread(() -> {
             try {
@@ -73,7 +89,28 @@ public class ClientManager {
         }).start();
     }
 
-    /** Send movement to server */
+    /** Cleanly disconnect from server (can reconnect later) */
+    public void disconnect() {
+        if (client != null && client.isConnected()) {
+            client.close(); // closes connection, server gets disconnect
+        }
+        players.clear();
+        localPlayer = null;
+        connecting = false;
+    }
+
+    /** Dispose when shutting down the whole game (LibGDX lifecycle) */
+    public void dispose() {
+        if (client != null) {
+            client.stop(); // fully stop threads
+            client = null; // force recreation next time
+        }
+        players.clear();
+        localPlayer = null;
+        connecting = false;
+    }
+
+    /** Send local player position to server */
     public void sendPosition(float x, float y) {
         if (localPlayer == null) return;
 
@@ -85,47 +122,54 @@ public class ClientManager {
 
         localPlayer.x = x;
         localPlayer.y = y;
+        localPlayer.targetX = x;
+        localPlayer.targetY = y;
     }
 
-    /** Called when WorldState/Joined/Position is received */
+    /** Interpolate remote players each frame */
+    public void update(float delta) {
+        for (PlayerData p : players.values()) {
+            if (localPlayer == null || p.id != localPlayer.id) {
+                p.update(delta);
+            }
+        }
+    }
+
     private void addOrUpdate(int id, float x, float y, String name) {
         PlayerData p = players.get(id);
         if (p == null) {
-            p = new PlayerData(id, name != null ? name : "Unknown", x, y);
+            p = new PlayerData(id, (name != null ? name : "Unknown"), x, y);
             players.put(id, p);
-            if (localPlayer == null || id == client.getID()) {
-                localPlayer = p; // assign local player
-            }
         } else {
-            p.x = x;
-            p.y = y;
+            p.targetX = x;
+            p.targetY = y;
             if (name != null) p.name = name;
         }
     }
 
-    public HashMap<Integer, PlayerData> getPlayers() {
-        return players;
-    }
-
-    public PlayerData getLocalPlayer() {
-        return localPlayer;
-    }
-
-    public void dispose() {
-        client.stop();
-    }
+    public HashMap<Integer, PlayerData> getPlayers() { return players; }
+    public PlayerData getLocalPlayer() { return localPlayer; }
 
     // === Player Data Model ===
     public static class PlayerData {
         public int id;
         public String name;
+
         public float x, y;
+        public float targetX, targetY;
 
         public PlayerData(int id, String name, float x, float y) {
             this.id = id;
             this.name = name;
-            this.x = x;
-            this.y = y;
+            this.x = this.targetX = x;
+            this.y = this.targetY = y;
+        }
+
+        public void update(float delta) {
+            float lerp = 10f * delta;
+            if (lerp > 1f) lerp = 1f;
+            x += (targetX - x) * lerp;
+            y += (targetY - y) * lerp;
         }
     }
 }
