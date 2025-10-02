@@ -1,0 +1,25 @@
+plugins {
+  id 'application'
+}
+
+application {
+  // point to your server main class
+  mainClass = 'net.alex.game.server.ServerMain'
+}
+
+dependencies {
+  implementation project(':core')
+
+  // KryoNet + Kryo
+  api "com.esotericsoftware:kryo:$kryoVersion"
+  api "com.github.crykn:kryonet:$kryoNetVersion"
+
+  // (Optional) logging
+  implementation "org.slf4j:slf4j-simple:2.0.16"
+}
+
+java {
+  toolchain {
+    languageVersion = JavaLanguageVersion.of(17) // or 21 if that’s your JDK
+  }
+}

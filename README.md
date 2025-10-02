@@ -1,1 +1,2 @@
-# GDX-MultiplayerTemplate
+# MultiplayerTemplate
+
