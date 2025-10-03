@@ -15,6 +15,7 @@ public class FirstScreen implements Screen {
     private Stage stage;
     private Skin skin;
     private TextField ipField;
+    private TextField nameField;
     private TextButton joinButton;
     private TextButton leaveButton;
 
@@ -36,16 +37,33 @@ public class FirstScreen implements Screen {
         table.setFillParent(true);
         stage.addActor(table);
 
+        // IP input
         ipField = new TextField("127.0.0.1", skin);
         ipField.setMessageText("Enter server IP");
 
+        // Name input
+        nameField = new TextField("", skin);
+        nameField.setMessageText("Enter player name");
+
+        // Join button
         joinButton = new TextButton("Join", skin);
         joinButton.addListener(event -> {
             if (!joinButton.isPressed()) return false;
-            clientManager.connect(ipField.getText());
+
+            String ip = ipField.getText().trim();
+            String name = nameField.getText().trim();
+            if (name.isEmpty()) name = "Player_" + System.currentTimeMillis();
+
+            if (clientManager.connect(ip, name)) {
+                // Only go to game if actually connected
+                game.setScreen(new TestGame(clientManager));
+            } else {
+                System.out.println("Failed to connect to server");
+            }
             return true;
         });
 
+        // Leave button
         leaveButton = new TextButton("Leave", skin);
         leaveButton.addListener(event -> {
             if (!leaveButton.isPressed()) return false;
@@ -53,7 +71,10 @@ public class FirstScreen implements Screen {
             return true;
         });
 
+        // Layout
         table.add(ipField).width(200).pad(10);
+        table.row();
+        table.add(nameField).width(200).pad(10);
         table.row();
         table.add(joinButton).pad(10);
         table.row();
@@ -65,16 +86,11 @@ public class FirstScreen implements Screen {
         Gdx.gl.glClearColor(0, 0, 0, 1);
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
 
-        // Update networking (smoothing)
+        // Update networking
         clientManager.update(delta);
 
         stage.act(delta);
         stage.draw();
-
-        // print player positions
-//        for (ClientManager.PlayerData player : clientManager.getPlayers().values()) {
-//            System.out.println(player.name + " @ " + player.x + "," + player.y);
-//        }
     }
 
     @Override public void resize(int width, int height) { stage.getViewport().update(width, height, true); }

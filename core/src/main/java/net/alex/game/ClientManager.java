@@ -1,8 +1,12 @@
 package net.alex.game;
 
+import com.badlogic.gdx.utils.Json;
 import com.esotericsoftware.kryonet.*;
 import net.alex.game.network.Network;
 
+import java.io.File;
+import java.io.FileReader;
+import java.io.FileWriter;
 import java.util.HashMap;
 
 public class ClientManager {
@@ -12,12 +16,13 @@ public class ClientManager {
     private final HashMap<Integer, PlayerData> players = new HashMap<>();
     private PlayerData localPlayer;
 
-    public ClientManager() {
-        createClient();
-    }
+    private Profile profile; // persistent profile
+    private final Json json = new Json();
+    private final File profileFile = new File("profile.json");
 
-    /** Create a new KryoNet Client and register listeners */
-    private void createClient() {
+    public ClientManager() {
+        loadProfile();
+
         client = new Client();
         Network.register(client);
 
@@ -26,7 +31,8 @@ public class ClientManager {
             public void connected(Connection c) {
                 System.out.println("Connected to server.");
                 Network.RegisterPlayer reg = new Network.RegisterPlayer();
-                reg.name = "Player"; // TODO: replace with user input later
+                reg.id = profile.id; // Send stored id (0 if new)
+                reg.name = profile.name;
                 client.sendTCP(reg);
             }
 
@@ -34,49 +40,82 @@ public class ClientManager {
             public void disconnected(Connection c) {
                 System.out.println("Disconnected from server.");
                 players.clear();
-                localPlayer = null;
-                connecting = false;
+                localPlayer = null; // reset local ref
+                connecting = false; // allow reconnect
             }
 
             @Override
             public void received(Connection c, Object object) {
-                if (object instanceof Network.WorldState) {
+                if (object instanceof Network.AssignId) {
+                    Network.AssignId assign = (Network.AssignId) object;
+                    profile.id = assign.id;
+                    saveProfile();
+                    System.out.println("Assigned permanent ID: " + assign.id);
+
+                } else if (object instanceof Network.WorldState) {
                     Network.WorldState state = (Network.WorldState) object;
-                    for (Network.PlayerPosition pos : state.players) {
-                        addOrUpdate(pos.id, pos.x, pos.y, null);
+                    players.clear();
+                    for (Network.PlayerUpdate u : state.players) {
+                        addOrUpdate(u.id, u.x, u.y, "Unknown", u.shape);
                     }
 
                 } else if (object instanceof Network.PlayerJoined) {
                     Network.PlayerJoined joined = (Network.PlayerJoined) object;
                     System.out.println("Player joined: " + joined.name);
-                    addOrUpdate(joined.id, 0, 0, joined.name);
+                    addOrUpdate(joined.id, 0, 0, joined.name, 1);
 
                 } else if (object instanceof Network.PlayerLeft) {
                     Network.PlayerLeft left = (Network.PlayerLeft) object;
                     System.out.println("Player left: " + left.id);
                     players.remove(left.id);
 
-                } else if (object instanceof Network.PlayerPosition) {
-                    Network.PlayerPosition pos = (Network.PlayerPosition) object;
-                    PlayerData p = players.get(pos.id);
-                    if (p != null) {
-                        p.targetX = pos.x;
-                        p.targetY = pos.y;
-                    }
+                } else if (object instanceof Network.PlayerUpdate) {
+                    Network.PlayerUpdate u = (Network.PlayerUpdate) object;
+                    addOrUpdate(u.id, u.x, u.y, null, u.shape);
                 }
             }
         });
     }
 
-    /** Try connecting to a server */
-    public void connect(String ip) {
-        if (connecting) return;
+    // === Profile Persistence ===
+    private void loadProfile() {
+        try {
+            if (profileFile.exists()) {
+                profile = json.fromJson(Profile.class, new FileReader(profileFile));
+            } else {
+                profile = new Profile();
+                profile.id = 0; // new player
+                profile.name = "Player_" + System.currentTimeMillis();
+                saveProfile();
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+            profile = new Profile();
+            profile.id = 0;
+            profile.name = "Player_" + System.currentTimeMillis();
+        }
+    }
+
+    private void saveProfile() {
+        try (FileWriter writer = new FileWriter(profileFile)) {
+            writer.write(json.prettyPrint(profile));
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    public static class Profile {
+        public int id;
+        public String name;
+    }
+
+    // === Networking ===
+    public boolean connect(String ip, String playerName) {
+        if (connecting) return false;
         connecting = true;
 
-        // If client was stopped (from dispose), make a new one
-        if (client == null) {
-            createClient();
-        }
+        profile.name = playerName; // save chosen name
+        saveProfile();
 
         new Thread(() -> {
             try {
@@ -87,46 +126,39 @@ public class ClientManager {
                 connecting = false;
             }
         }).start();
+
+        return true;
     }
 
-    /** Cleanly disconnect from server (can reconnect later) */
     public void disconnect() {
-        if (client != null && client.isConnected()) {
-            client.close(); // closes connection, server gets disconnect
+        try {
+            if (client != null && client.isConnected()) {
+                client.close(); // clean disconnect
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        } finally {
+            players.clear();
+            localPlayer = null;
+            connecting = false;
         }
-        players.clear();
-        localPlayer = null;
-        connecting = false;
     }
 
-    /** Dispose when shutting down the whole game (LibGDX lifecycle) */
-    public void dispose() {
-        if (client != null) {
-            client.stop(); // fully stop threads
-            client = null; // force recreation next time
-        }
-        players.clear();
-        localPlayer = null;
-        connecting = false;
+    public void sendPlayerUpdate(PlayerData me) {
+        if (me == null) return;
+        Network.PlayerUpdate packet = new Network.PlayerUpdate();
+        packet.id = me.id;
+        packet.x = me.x;
+        packet.y = me.y;
+        packet.shape = me.shape;
+        client.sendUDP(packet);
+
+        // update local instantly
+        localPlayer.x = me.x;
+        localPlayer.y = me.y;
+        localPlayer.shape = me.shape;
     }
 
-    /** Send local player position to server */
-    public void sendPosition(float x, float y) {
-        if (localPlayer == null) return;
-
-        Network.PlayerPosition pos = new Network.PlayerPosition();
-        pos.id = localPlayer.id;
-        pos.x = x;
-        pos.y = y;
-        client.sendUDP(pos);
-
-        localPlayer.x = x;
-        localPlayer.y = y;
-        localPlayer.targetX = x;
-        localPlayer.targetY = y;
-    }
-
-    /** Interpolate remote players each frame */
     public void update(float delta) {
         for (PlayerData p : players.values()) {
             if (localPlayer == null || p.id != localPlayer.id) {
@@ -135,34 +167,48 @@ public class ClientManager {
         }
     }
 
-    private void addOrUpdate(int id, float x, float y, String name) {
+    private void addOrUpdate(int id, float x, float y, String name, int shape) {
         PlayerData p = players.get(id);
         if (p == null) {
-            p = new PlayerData(id, (name != null ? name : "Unknown"), x, y);
+            p = new PlayerData(id, name, x, y, shape);
             players.put(id, p);
+            if (id == profile.id) {
+                localPlayer = p;
+            }
         } else {
             p.targetX = x;
             p.targetY = y;
             if (name != null) p.name = name;
+            p.shape = shape;
         }
     }
 
     public HashMap<Integer, PlayerData> getPlayers() { return players; }
     public PlayerData getLocalPlayer() { return localPlayer; }
+    public int getPlayerId() { return profile.id; }
 
-    // === Player Data Model ===
+    public void dispose() {
+        try {
+            client.stop();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    // === PlayerData ===
     public static class PlayerData {
         public int id;
         public String name;
-
         public float x, y;
         public float targetX, targetY;
+        public int shape = 1; // default: triangle
 
-        public PlayerData(int id, String name, float x, float y) {
+        public PlayerData(int id, String name, float x, float y, int shape) {
             this.id = id;
             this.name = name;
             this.x = this.targetX = x;
             this.y = this.targetY = y;
+            this.shape = shape;
         }
 
         public void update(float delta) {
