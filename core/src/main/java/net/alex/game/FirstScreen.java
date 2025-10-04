@@ -55,10 +55,10 @@ public class FirstScreen implements Screen {
             if (name.isEmpty()) name = "Player_" + System.currentTimeMillis();
 
             if (clientManager.connect(ip, name)) {
-                // Only go to game if actually connected
-                game.setScreen(new TestGame(clientManager));
+                // don’t immediately switch
+                System.out.println("Connecting to server...");
             } else {
-                System.out.println("Failed to connect to server");
+                System.out.println("Already connecting or failed to start connection.");
             }
             return true;
         });
@@ -86,11 +86,15 @@ public class FirstScreen implements Screen {
         Gdx.gl.glClearColor(0, 0, 0, 1);
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
 
-        // Update networking
         clientManager.update(delta);
-
         stage.act(delta);
         stage.draw();
+
+        // ✅ Safe transition once the client is really connected
+        if (clientManager.isReadyToEnterGame()) {
+            game.setScreen(new TestGame(clientManager));
+            clientManager.setReadyToEnterGame(false);
+        }
     }
 
     @Override public void resize(int width, int height) { stage.getViewport().update(width, height, true); }

@@ -32,7 +32,6 @@ public class Network {
         public float x, y;
     }
 
-    // ✅ New: Full update with position + shape
     public static class PlayerUpdate {
         public int id;
         public float x, y;

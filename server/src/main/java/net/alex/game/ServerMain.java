@@ -50,42 +50,33 @@ public class ServerMain {
                     Network.RegisterPlayer reg = (Network.RegisterPlayer) object;
 
                     Player player;
+                    boolean isNew = false;
+
                     if (reg.id == 0 || !players.containsKey(reg.id)) {
-                        // New player
+                        // === New player ===
                         int newId = nextPlayerId++;
                         player = new Player(newId, reg.name, c.getID());
                         players.put(newId, player);
-
-                        // Send back permanent ID
-                        Network.AssignId assign = new Network.AssignId();
-                        assign.id = newId;
-                        server.sendToTCP(c.getID(), assign);
-
-                        // Announce join
-                        Network.PlayerJoined joined = new Network.PlayerJoined();
-                        joined.id = newId;
-                        joined.name = reg.name;
-                        server.sendToAllTCP(joined);
+                        isNew = true;
 
                         System.out.println("Registered new: " + reg.name + " (" + newId + ")");
                     } else {
-                        // Returning player
+                        // === Returning player ===
                         player = players.get(reg.id);
                         player.connectionId = c.getID();
                         player.name = reg.name;
-
-                        // Announce reconnect as join
-                        Network.PlayerJoined joined = new Network.PlayerJoined();
-                        joined.id = player.id;
-                        joined.name = player.name;
-                        server.sendToAllTCP(joined);
 
                         System.out.println("Reconnected: " + reg.name + " (" + reg.id + ")");
                     }
 
                     savePlayers();
 
-                    // Send full world state to just this client
+                    // === 1) Send back permanent ID first ===
+                    Network.AssignId assign = new Network.AssignId();
+                    assign.id = player.id;
+                    server.sendToTCP(c.getID(), assign);
+
+                    // === 2) Send full world state to just this client ===
                     Network.WorldState world = new Network.WorldState();
                     world.players = players.values().stream().map(p -> {
                         Network.PlayerUpdate u = new Network.PlayerUpdate();
@@ -97,6 +88,11 @@ public class ServerMain {
                     }).toArray(Network.PlayerUpdate[]::new);
                     server.sendToTCP(c.getID(), world);
 
+                    // === 3) Announce join AFTER world state ===
+                    Network.PlayerJoined joined = new Network.PlayerJoined();
+                    joined.id = player.id;
+                    joined.name = player.name;
+                    server.sendToAllTCP(joined);
                 } else if (object instanceof Network.PlayerUpdate) {
                     Network.PlayerUpdate update = (Network.PlayerUpdate) object;
                     Player player = players.get(update.id);
@@ -125,9 +121,15 @@ public class ServerMain {
             json.setUsePrototypes(false);
 
             FileHandle file = new FileHandle(new File(SAVE_FILE));
-            String pretty = json.prettyPrint(players);
+
+            // 🔑 Always write a valid JSON object, even if empty
+            String pretty = (players == null || players.isEmpty())
+                    ? "{}"
+                    : json.prettyPrint(players);
+
             file.writeString(pretty, false);
-            System.out.println("Saved " + players.size() + " players to " + SAVE_FILE);
+            // Annoying haha
+            // System.out.println("Saved " + players.size() + " players to " + SAVE_FILE);
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -141,10 +143,11 @@ public class ServerMain {
                 Json json = new Json();
                 HashMap<String, Player> raw = json.fromJson(HashMap.class, Player.class, file);
 
-                // Convert String keys back to Integer
                 players = new HashMap<>();
-                for (String key : raw.keySet()) {
-                    players.put(Integer.parseInt(key), raw.get(key));
+                if (raw != null) { // fix: check for null
+                    for (String key : raw.keySet()) {
+                        players.put(Integer.parseInt(key), raw.get(key));
+                    }
                 }
 
                 int maxId = players.keySet().stream().mapToInt(i -> i).max().orElse(0);

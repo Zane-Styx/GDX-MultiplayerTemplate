@@ -1,5 +1,6 @@
 package net.alex.game;
 
+import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.utils.Json;
 import com.esotericsoftware.kryonet.*;
 import net.alex.game.network.Network;
@@ -7,11 +8,14 @@ import net.alex.game.network.Network;
 import java.io.File;
 import java.io.FileReader;
 import java.io.FileWriter;
+import java.io.IOException;
 import java.util.HashMap;
 
 public class ClientManager {
     private Client client;
     private boolean connecting = false;
+    private volatile boolean connected = false;
+    private boolean readyToEnterGame = false;
 
     private final HashMap<Integer, PlayerData> players = new HashMap<>();
     private PlayerData localPlayer;
@@ -22,55 +26,71 @@ public class ClientManager {
 
     public ClientManager() {
         loadProfile();
+        setupClient();
+    }
 
+    /** Called once when creating client, can be reused for reconnect */
+    private void setupClient() {
         client = new Client();
         Network.register(client);
 
         client.addListener(new Listener() {
             @Override
             public void connected(Connection c) {
-                System.out.println("Connected to server.");
+                System.out.println("✅ Connected to server.");
+
+                connected = true;
+                connecting = false;
+
                 Network.RegisterPlayer reg = new Network.RegisterPlayer();
-                reg.id = profile.id; // Send stored id (0 if new)
+                reg.id = profile.id;
                 reg.name = profile.name;
                 client.sendTCP(reg);
+
+                // safely switch screen from LibGDX render thread
+                Gdx.app.postRunnable(() -> readyToEnterGame = true);
             }
 
             @Override
             public void disconnected(Connection c) {
-                System.out.println("Disconnected from server.");
+                System.out.println("⚠️ Disconnected from server.");
                 players.clear();
-                localPlayer = null; // reset local ref
-                connecting = false; // allow reconnect
+                localPlayer = null;
+                connected = false;
+                connecting = false;
+
+                try { client.stop(); } catch (Exception ignored) {}
+
+                // Go back to first screen safely
+                Gdx.app.postRunnable(() -> {
+                    if (Gdx.app.getApplicationListener() instanceof MainGame game) {
+                        game.setScreen(new FirstScreen(game));
+                    }
+                });
             }
 
             @Override
             public void received(Connection c, Object object) {
-                if (object instanceof Network.AssignId) {
-                    Network.AssignId assign = (Network.AssignId) object;
+                if (object instanceof Network.AssignId assign) {
                     profile.id = assign.id;
                     saveProfile();
                     System.out.println("Assigned permanent ID: " + assign.id);
 
-                } else if (object instanceof Network.WorldState) {
-                    Network.WorldState state = (Network.WorldState) object;
+                } else if (object instanceof Network.WorldState state) {
                     players.clear();
                     for (Network.PlayerUpdate u : state.players) {
                         addOrUpdate(u.id, u.x, u.y, "Unknown", u.shape);
                     }
 
-                } else if (object instanceof Network.PlayerJoined) {
-                    Network.PlayerJoined joined = (Network.PlayerJoined) object;
+                } else if (object instanceof Network.PlayerJoined joined) {
                     System.out.println("Player joined: " + joined.name);
                     addOrUpdate(joined.id, 0, 0, joined.name, 1);
 
-                } else if (object instanceof Network.PlayerLeft) {
-                    Network.PlayerLeft left = (Network.PlayerLeft) object;
+                } else if (object instanceof Network.PlayerLeft left) {
                     System.out.println("Player left: " + left.id);
                     players.remove(left.id);
 
-                } else if (object instanceof Network.PlayerUpdate) {
-                    Network.PlayerUpdate u = (Network.PlayerUpdate) object;
+                } else if (object instanceof Network.PlayerUpdate u) {
                     addOrUpdate(u.id, u.x, u.y, null, u.shape);
                 }
             }
@@ -110,22 +130,31 @@ public class ClientManager {
     }
 
     // === Networking ===
-    public boolean connect(String ip, String playerName) {
-        if (connecting) return false;
-        connecting = true;
+    public synchronized boolean connect(String ip, String playerName) {
+        if (connecting || connected) {
+            System.out.println("⚠️ Already connecting or connected. Ignoring new attempt.");
+            return false;
+        }
 
-        profile.name = playerName; // save chosen name
+        connecting = true;
+        profile.name = playerName;
         saveProfile();
 
         new Thread(() -> {
             try {
+                if (client == null || !client.isConnected()) setupClient();
                 client.start();
+
+                System.out.println("🌐 Connecting to server at " + ip + "...");
                 client.connect(5000, ip, Network.tcpPort, Network.udpPort);
+
             } catch (Exception e) {
-                e.printStackTrace();
+                System.out.println("❌ Connection failed: " + e.getMessage());
+            } finally {
+                // even on failure, reset so we can retry later
                 connecting = false;
             }
-        }).start();
+        }, "ClientConnectThread").start();
 
         return true;
     }
@@ -186,6 +215,11 @@ public class ClientManager {
     public HashMap<Integer, PlayerData> getPlayers() { return players; }
     public PlayerData getLocalPlayer() { return localPlayer; }
     public int getPlayerId() { return profile.id; }
+    public boolean isConnected() {
+        return connected && client != null && client.isConnected();
+    }
+    public boolean isReadyToEnterGame() { return readyToEnterGame; }
+    public void setReadyToEnterGame(boolean ready) { this.readyToEnterGame = ready; }
 
     public void dispose() {
         try {
